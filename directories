@@ -25,3 +25,123 @@ project_root/
 └── config/                         # 全局配置
     ├── global.conf
     └── modules.conf
+
+
+=========================================================运行示例================================================================
+# 进入项目目录
+cd /path/to/project_root
+
+# 运行备份脚本
+./scripts/run_backup.sh
+
+# 运行完整流水线
+./scripts/run_pipeline.sh
+
+# 调试模式运行
+DEBUG=true ./scripts/run_pipeline.sh
+
+# 查看日志
+tail -f logs/pipeline/pipeline_*.log
+
+# 查看数据库模块日志
+tail -f logs/database/run_pipeline_*.log
+
+=========================================================调用关系图================================================================
+┌─────────────────────────────────────────────────────────────┐
+│                     用户执行脚本                              │
+└─────────────────────────────────────────────────────────────┘
+                              │
+                              ▼
+┌─────────────────────────────────────────────────────────────┐
+│  scripts/run_pipeline.sh                                    │
+│  ├── 设置 PROJECT_ROOT                                      │
+│  ├── source bin/bash_lib.sh                                 │
+│  ├── init_environment "pipeline"                            │
+│  │   ├── set -euo pipefail                                  │
+│  │   ├── init_logging() → 创建日志目录和文件                  │
+│  │   └── setup_traps() → trap cleanup EXIT                  │
+│  ├── register_module "database"                             │
+│  ├── register_module "backup"                               │
+│  ├── register_module "report"                               │
+│  ├── load_modules                                           │
+│  │   └── source modules/*/main.sh                           │
+│  └── 执行业务逻辑                                              │
+│      ├── database_main()                                    │
+│      ├── db_backup()                                        │
+│      ├── report_generate()                                  │
+│      └── backup_create()                                    │
+└─────────────────────────────────────────────────────────────┘
+                              │
+                              ▼
+┌─────────────────────────────────────────────────────────────┐
+│  bin/bash_lib.sh                                            │
+│  ├── 路径检测                                                 │
+│  ├── 目录配置                                                 │
+│  ├── 日志函数 (log_info, log_error, etc.)                    │
+│  ├── 模块注册 (register_module, load_modules)                │
+│  ├── 清理系统 (cleanup, register_cleanup)                    │
+│  └── 辅助函数 (create_module_temp_dir, safe_rm_dir)          │
+└─────────────────────────────────────────────────────────────┘
+                              │
+                              ▼
+┌─────────────────────────────────────────────────────────────┐
+│  modules/database/main.sh                                   │
+│  ├── 私有函数 _db_connect()                                  │
+│  ├── 清理函数 cleanup_database()                             │
+│  ├── 公有函数 db_backup(), db_restore()                      │
+│  └── 主函数 database_main()                                  │
+└─────────────────────────────────────────────────────────────┘
+
+=========================================================输出示例================================================================
+============================================================================
+日志系统初始化
+脚本: run_pipeline.sh
+模块: pipeline
+日志: /project/logs/pipeline/run_pipeline_20250115_143022.log
+时间: 2025-01-15 14:30:22
+============================================================================
+[2025-01-15 14:30:22] [INFO] 环境初始化完成: pipeline
+[2025-01-15 14:30:22] [INFO] ========== 数据流水线启动 ==========
+[2025-01-15 14:30:22] [INFO] 注册模块: database
+[2025-01-15 14:30:22] [INFO] 注册模块: backup
+[2025-01-15 14:30:22] [INFO] 注册模块: report
+[2025-01-15 14:30:22] [INFO] 加载 3 个模块
+[2025-01-15 14:30:22] [INFO] ✓ 已加载模块: database
+[2025-01-15 14:30:22] [INFO] ✓ 已加载模块: backup
+[2025-01-15 14:30:22] [INFO] ✓ 已加载模块: report
+[2025-01-15 14:30:22] [INFO] 所有模块加载完成
+[2025-01-15 14:30:22] [INFO] 步骤1: 准备数据库
+[2025-01-15 14:30:22] [INFO] [database] 数据库模块启动
+[2025-01-15 14:30:22] [SUCCESS] [database] 数据库连接成功
+[2025-01-15 14:30:22] [INFO] [database] 数据库模块就绪
+[2025-01-15 14:30:22] [INFO] 步骤2: 备份数据库
+[2025-01-15 14:30:22] [INFO] [database] 备份数据库: myapp -> pre_pipeline
+[2025-01-15 14:30:22] [SUCCESS] [database] 数据库备份完成: /project/temp/database/pre_pipeline.sql
+[2025-01-15 14:30:22] [INFO] 备份文件: /project/temp/database/pre_pipeline.sql
+[2025-01-15 14:30:22] [INFO] 步骤3: 生成报表
+[2025-01-15 14:30:22] [INFO] [report] 生成报表: daily_report
+[2025-01-15 14:30:22] [SUCCESS] [report] 报表生成完成: /project/reports/daily_report_20250115.html
+[2025-01-15 14:30:22] [INFO] 报表文件: /project/reports/daily_report_20250115.html
+[2025-01-15 14:30:22] [INFO] 步骤4: 归档备份
+[2025-01-15 14:30:22] [INFO] [backup] 备份模块启动
+[2025-01-15 14:30:22] [INFO] [backup] 备份目录: /project/backups
+[2025-01-15 14:30:22] [INFO] [backup] 保留天数: 7
+[2025-01-15 14:30:22] [INFO] [backup] 列出备份文件
+[2025-01-15 14:30:22] [SUCCESS] [backup] 备份创建成功: /project/backups/pipeline_archive_20250115_143022.tar.gz
+[2025-01-15 14:30:22] [SUCCESS] 数据流水线执行完成
+[2025-01-15 14:30:22] [INFO] 备份文件: /project/temp/database/pre_pipeline.sql
+[2025-01-15 14:30:22] [INFO] 报表文件: /project/reports/daily_report_20250115.html
+
+========== 执行摘要 ==========
+数据库备份: /project/temp/database/pre_pipeline.sql
+报表生成: /project/reports/daily_report_20250115.html
+日志文件: /project/logs/pipeline/run_pipeline_20250115_143022.log
+==============================
+
+----------------------------------------------------------------------------
+[2025-01-15 14:30:22] [INFO] 开始清理...
+[2025-01-15 14:30:22] [INFO] 清理数据库模块资源
+[2025-01-15 14:30:22] [INFO] 清理备份模块临时文件
+[2025-01-15 14:30:22] [INFO] 清理报表模块资源
+[2025-01-15 14:30:22] [SUCCESS] 脚本正常完成
+============================================================================
