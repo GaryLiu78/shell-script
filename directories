@@ -1,3 +1,4 @@
+v1.
 project_root/
 ├── bin/
 │   └── bash_lib.sh                 # 共享库
@@ -145,3 +146,29 @@ tail -f logs/database/run_pipeline_*.log
 [2025-01-15 14:30:22] [INFO] 清理报表模块资源
 [2025-01-15 14:30:22] [SUCCESS] 脚本正常完成
 ============================================================================
+
+v2.
+project_root/
+├── run.sh                           # 主启动器（放在根目录）
+├── bin/
+│   └── bash_lib.sh                  # 核心库
+├── scripts/
+│   ├── run_backup.sh                # 备份脚本
+│   ├── run_pipeline.sh              # 流水线脚本
+│   └── lib/                         # 脚本私有库
+│       └── common.sh
+├── modules/
+│   ├── database/
+│   │   └── main.sh
+│   ├── backup/
+│   │   └── main.sh
+│   └── report/
+│       └── main.sh
+├── config/
+│   ├── global.conf
+│   └── modules.conf
+├── logs/                            # 自动创建
+├── temp/                            # 自动创建
+└── Makefile                         # 可选
+
+
