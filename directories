@@ -171,4 +171,64 @@ project_root/
 ├── temp/                            # 自动创建
 └── Makefile                         # 可选
 
+=======================================================基础使用======================================================
+# 在项目根目录
+cd /path/to/project_root
+
+# 查看帮助
+./run.sh --help
+./run.sh --list
+
+# 运行备份
+./run.sh backup
+
+# 运行流水线（调试模式）
+./run.sh pipeline --debug
+
+# 查看状态
+./run.sh status
+
+# 清理临时文件
+./run.sh clean
+
+==========================================================高级使用=========================================================
+# 带参数运行备份
+./run.sh backup --full --compress
+
+# 跳过流水线的某个阶段
+./run.sh pipeline --skip database
+
+# 使用环境变量
+DEBUG=true LOG_LEVEL=DEBUG ./run.sh backup
+
+# 使用自定义配置
+./run.sh report --config production.conf
+
+# 从任何目录运行（使用软链接）
+cd /tmp
+myapp backup
+myapp status
+
+======================================================直接运行脚本（不通过启动器）======================================================
+# 独立执行（自动检测项目根目录）
+./scripts/run_backup.sh --full --compress
+./scripts/run_pipeline.sh --debug
+
+======================================================安装到系统（可选）======================================================
+# 方式1：使用 make
+make install
+# 现在可以在任何地方使用 myapp 命令
+
+# 方式2：手动创建软链接
+sudo ln -s /path/to/project_root/run.sh /usr/local/bin/myapp
+
+# 使用
+myapp backup
+myapp status
+
+
+
+
+
+
 
