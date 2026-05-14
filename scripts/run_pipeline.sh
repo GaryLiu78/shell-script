@@ -1,103 +1,68 @@
 #!/bin/bash
-# run_pipeline.sh - 数据流水线入口 v2
-# 
-# 描述: 执行完整的数据处理流水线
-# Stage: 数据库备份 → 数据处理 → 报表生成 → 归档
+# scripts/run_pipeline.sh - Oracle流水线入口
 
-# 自动检测项目根目录
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
-
-# 验证并加载库
-if [[ ! -f "$PROJECT_ROOT/bin/bash_lib.sh" ]]; then
-    echo "错误: 找不到 bin/bash_lib.sh" >&2
+if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+    echo "请通过 run.sh 调用: ./run.sh pipeline" >&2
     exit 1
 fi
 
-source "$PROJECT_ROOT/bin/bash_lib.sh"
-
-# 配置
-MODULE_NAME="pipeline"
-STAGES=("database" "backup" "report")
-SKIP_STAGES=()
-
-# 解析参数
-while [[ $# -gt 0 ]]; do
-    case $1 in
-        --skip)
-            SKIP_STAGES+=("$2")
-            shift 2
-            ;;
-        --debug)
-            export DEBUG=true
-            shift
-            ;;
-        --help)
-            echo "流水线执行器"
-            echo "用法: $0 [--skip stage] [--debug]"
-            exit 0
-            ;;
-        *)
-            shift
-            ;;
-    esac
-done
-
-# 初始化
-init_environment "$MODULE_NAME"
-
-log_info "========== 数据流水线启动 =========="
-log_info "执行阶段: ${STAGES[*]}"
-[[ ${#SKIP_STAGES[@]} -gt 0 ]] && log_info "跳过阶段: ${SKIP_STAGES[*]}"
+init_environment "pipeline"
+source "$SCRIPTS_DIR/common.sh"
 
 # 注册模块
-for stage in "${STAGES[@]}"; do
-    if [[ -d "$PROJECT_ROOT/modules/$stage" ]]; then
-        register_module "$stage" "$PROJECT_ROOT/modules/$stage"
-        register_module_cleanup "$stage"
-    else
-        log_warn "模块不存在: $stage"
-    fi
-done
+register_module "database" "$MODULES_DIR/database"
+register_module "backup" "$MODULES_DIR/backup"
+register_module "report" "$MODULES_DIR/report"
+load_modules || exit 1
 
-# 加载模块
-load_modules
+# 注册清理
+for m in database backup report; do register_module_cleanup "$m"; done
 
-# 执行流水线
-pipeline_start_time=$(date +%s)
-
-# Stage 1: 数据库
-if [[ ! " ${SKIP_STAGES[*]} " =~ " database " ]]; then
-    log_info ">>> Stage 1: 数据库模块 <<<"
+main() {
+    log_info "========== Oracle数据流水线启动 =========="
+    check_dependencies "sqlplus" "expdp" "impdp" "python3"
+    
+    local start_time=$(date +%s)
+    local work_dir=$(create_module_temp_dir)
+    
+    # Stage 1: Oracle数据库准备
+    log_info ">>> Stage 1: 检查Oracle数据库 <<<"
     database_main
-    db_backup "pipeline_stage1"
-    log_success "Stage 1 完成"
-else
-    log_warn "跳过 Stage 1"
-fi
+    
+    # Stage 2: 验证数据库连接
+    log_info ">>> Stage 2: 验证Oracle连接 <<<"
+    if ! oracle_check_connection; then
+        die "Oracle数据库连接失败"
+    fi
+    
+    # Stage 3: 获取数据库统计信息
+    log_info ">>> Stage 3: 收集统计信息 <<<"
+    oracle_get_stats "$work_dir"
+    
+    # Stage 4: 备份数据库
+    log_info ">>> Stage 4: 备份数据库 <<<"
+    local backup_file=$(oracle_full_backup "$work_dir")
+    
+    # Stage 5: 生成报表
+    log_info ">>> Stage 5: 生成报表 <<<"
+    report_generate "oracle_pipeline_report"
+    
+    # Stage 6: 清理旧数据
+    log_info ">>> Stage 6: 清理归档日志 <<<"
+    oracle_cleanup_archivelog
+    
+    local duration=$(($(date +%s) - start_time))
+    log_success "Oracle流水线完成 (耗时: ${duration}秒)"
+    
+    # 输出摘要
+    echo ""
+    echo "========== 流水线摘要 =========="
+    echo "备份文件: $backup_file"
+    echo "工作目录: $work_dir"
+    echo "日志文件: $LOG_FILE"
+    echo "================================"
+    
+    send_notification "Oracle流水线完成" "备份: $backup_file\n耗时: ${duration}秒"
+}
 
-# Stage 2: 备份
-if [[ ! " ${SKIP_STAGES[*]} " =~ " backup " ]]; then
-    log_info ">>> Stage 2: 备份模块 <<<"
-    backup_main
-    backup_create "pipeline_backup" "$PROJECT_ROOT/temp/database"
-    log_success "Stage 2 完成"
-else
-    log_warn "跳过 Stage 2"
-fi
-
-# Stage 3: 报表
-if [[ ! " ${SKIP_STAGES[*]} " =~ " report " ]]; then
-    log_info ">>> Stage 3: 报表模块 <<<"
-    report_generate "pipeline_report"
-    log_success "Stage 3 完成"
-else
-    log_warn "跳过 Stage 3"
-fi
-
-# 计算耗时
-pipeline_end_time=$(date +%s)
-pipeline_duration=$((pipeline_end_time - pipeline_start_time))
-
-log_success "数据流水线执行完成"
-log_info "总耗时: ${pipeline_duration}秒"
+main
