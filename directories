@@ -266,7 +266,29 @@ $ ./run.sh pipeline --debug
 
 
 
-
+v3.
+project_root/
+├── run.sh                           # 主启动器
+├── Makefile                         # 构建管理
+├── bin/
+│   └── bash_lib.sh                  # 核心库
+├── scripts/
+│   ├── common.sh                    # 通用函数
+│   ├── run_backup.sh                # 备份脚本
+│   └── run_pipeline.sh              # 流水线脚本
+├── modules/
+│   ├── database/
+│   │   └── main.sh                  # 数据库模块
+│   ├── backup/
+│   │   └── main.sh                  # 备份模块
+│   └── report/
+│       └── main.sh                  # 报表模块
+├── config/
+│   ├── global.conf                  # 全局配置
+│   └── modules.conf                 # 模块配置
+├── logs/                            # 自动创建
+├── temp/                            # 自动创建
+└── backups/                         # 自动创建
 
 
 
