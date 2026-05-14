@@ -1,188 +1,96 @@
 #!/bin/bash
-# run_backup.sh - 备份模块入口v2
-# 
-# 描述: 执行系统备份任务
-# 用法: ./run_backup.sh [options]
-# 示例: ./run_backup.sh --full --compress
+# scripts/run_backup.sh - Oracle备份模块入口
 
-# ============================================================================
-# 自动检测项目根目录（支持独立执行）
-# ============================================================================
-get_project_root() {
-    # 如果已经设置，直接使用
-    if [[ -n "${PROJECT_ROOT:-}" ]] && [[ -f "$PROJECT_ROOT/bin/bash_lib.sh" ]]; then
-        echo "$PROJECT_ROOT"
-        return 0
-    fi
-    
-    # 通过脚本位置查找
-    local script_path
-    script_path="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-    
-    # 如果在 scripts 目录，项目根目录是上级
-    if [[ -f "$script_path/../bin/bash_lib.sh" ]]; then
-        echo "$(cd "$script_path/.." && pwd)"
-        return 0
-    fi
-    
-    # 向上查找
-    local current="$script_path"
-    while [[ "$current" != "/" ]]; do
-        if [[ -f "$current/bin/bash_lib.sh" ]]; then
-            echo "$current"
-            return 0
-        fi
-        current="$(dirname "$current")"
-    done
-    
-    echo ""
-    return 1
-}
-
-PROJECT_ROOT="$(get_project_root)"
-
-if [[ -z "$PROJECT_ROOT" ]]; then
-    echo "错误: 无法找到项目根目录" >&2
+# 检查调用方式
+if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+    echo "请通过 run.sh 调用: ./run.sh backup" >&2
     exit 1
 fi
 
-# 加载核心库
-source "$PROJECT_ROOT/bin/bash_lib.sh"
+# 初始化
+init_environment "backup"
 
-# ============================================================================
-# 脚本配置
-# ============================================================================
-MODULE_NAME="backup"
-SCRIPT_NAME="$(basename "$0")"
+# 加载通用函数
+source "$SCRIPTS_DIR/common.sh"
 
-# 解析命令行参数
-BACKUP_TYPE="incremental"  # full, incremental
+# 解析参数
+BACKUP_TYPE="full"  # full, schema, table
 COMPRESS=false
-BACKUP_DEST="${BACKUP_DEST:-$PROJECT_ROOT/backups}"
+SCHEMA_NAME=""
+TABLE_NAME=""
 
 while [[ $# -gt 0 ]]; do
     case $1 in
-        --full)
-            BACKUP_TYPE="full"
-            shift
-            ;;
-        --compress|-z)
-            COMPRESS=true
-            shift
-            ;;
-        --dest|-d)
-            BACKUP_DEST="$2"
-            shift 2
-            ;;
-        --help|-h)
-            cat << EOF
-备份脚本 - 执行系统备份
-
-用法: $0 [options]
-
-选项:
-    --full          执行完整备份（默认: 增量）
-    --compress, -z  压缩备份文件
-    --dest, -d DIR  指定备份目录
-    --help, -h      显示此帮助
-
-示例:
-    $0 --full --compress
-    $0 --dest /mnt/backup
-EOF
-            exit 0
-            ;;
-        *)
-            echo "未知选项: $1"
-            exit 1
-            ;;
+        --schema) SCHEMA_NAME="$2"; BACKUP_TYPE="schema"; shift 2 ;;
+        --table) TABLE_NAME="$2"; BACKUP_TYPE="table"; shift 2 ;;
+        --compress) COMPRESS=true; shift ;;
+        --full) BACKUP_TYPE="full"; shift ;;
+        *) shift ;;
     esac
 done
 
-# ============================================================================
-# 初始化环境
-# ============================================================================
-init_environment "$MODULE_NAME"
+# 注册模块
+register_module "database" "$MODULES_DIR/database"
+register_module "backup" "$MODULES_DIR/backup"
+load_modules || exit 1
 
-log_info "========== 备份任务开始 =========="
-log_info "备份类型: $BACKUP_TYPE"
-log_info "压缩: $COMPRESS"
-log_info "目标目录: $BACKUP_DEST"
-
-# ============================================================================
-# 模块加载
-# ============================================================================
-# 注册并加载需要的模块
-register_module "database" "$PROJECT_ROOT/modules/database"
-register_module "backup" "$PROJECT_ROOT/modules/backup"
-load_modules
-
-# 注册清理钩子
+# 注册清理
 register_module_cleanup "database"
 register_module_cleanup "backup"
 
-# ============================================================================
-# 业务逻辑
-# ============================================================================
+# 主逻辑
 main() {
-    # 创建临时工作目录
+    log_info "Oracle备份任务开始 (类型: $BACKUP_TYPE)"
+    
+    # 检查Oracle依赖
+    check_dependencies "sqlplus" "expdp" "exp" "gzip"
+    
     local work_dir=$(create_module_temp_dir)
     log_info "工作目录: $work_dir"
     
-    # 创建备份目录
-    mkdir -p "$BACKUP_DEST"
+    # 根据备份类型执行不同的备份策略
+    local backup_file=""
+    case "$BACKUP_TYPE" in
+        full)
+            log_info "执行全库备份..."
+            backup_file=$(oracle_full_backup "$work_dir")
+            ;;
+        schema)
+            if [[ -z "$SCHEMA_NAME" ]]; then
+                die "请指定schema名称: --schema SCHEMA_NAME"
+            fi
+            log_info "备份Schema: $SCHEMA_NAME"
+            backup_file=$(oracle_schema_backup "$SCHEMA_NAME" "$work_dir")
+            ;;
+        table)
+            if [[ -z "$TABLE_NAME" ]]; then
+                die "请指定表名: --table TABLE_NAME"
+            fi
+            log_info "备份表: $TABLE_NAME"
+            backup_file=$(oracle_table_backup "$TABLE_NAME" "$work_dir")
+            ;;
+    esac
     
-    # 步骤1: 准备数据库
-    log_info "步骤1: 准备数据库"
-    database_main || {
-        log_error "数据库准备失败"
-        exit 1
-    }
+    # 验证备份文件
+    validate_oracle_dump "$backup_file" || die "备份文件验证失败"
     
-    # 步骤2: 执行数据库备份
-    log_info "步骤2: 备份数据库"
-    local backup_file
-    if [[ "$BACKUP_TYPE" == "full" ]]; then
-        backup_file=$(db_backup "full_backup_$(date +%Y%m%d)")
-    else
-        backup_file=$(db_backup "inc_backup_$(date +%Y%m%d_%H%M%S)")
-    fi
-    
-    if [[ -z "$backup_file" ]]; then
-        log_error "数据库备份失败"
-        exit 1
-    fi
-    
-    log_success "数据库备份完成: $backup_file"
-    
-    # 步骤3: 压缩备份（如果需要）
+    # 压缩备份
     if [[ "$COMPRESS" == "true" ]]; then
-        log_info "步骤3: 压缩备份文件"
-        local compressed_file="$BACKUP_DEST/backup_$(date +%Y%m%d_%H%M%S).tar.gz"
-        
-        run_cmd tar -czf "$compressed_file" -C "$(dirname "$backup_file")" "$(basename "$backup_file")"
-        
-        log_success "压缩完成: $compressed_file"
-        BACKUP_RESULT="$compressed_file"
+        log_info "压缩备份文件..."
+        local final_backup="$BACKUPS_DIR/oracle_${BACKUP_TYPE}_$(date +%Y%m%d_%H%M%S).tar.gz"
+        run_cmd tar -czf "$final_backup" -C "$(dirname "$backup_file")" "$(basename "$backup_file")"
+        final_backup_file="$final_backup"
     else
-        cp "$backup_file" "$BACKUP_DEST/"
-        BACKUP_RESULT="$BACKUP_DEST/$(basename "$backup_file")"
+        cp "$backup_file" "$BACKUPS_DIR/"
+        final_backup_file="$BACKUPS_DIR/$(basename "$backup_file")"
     fi
     
-    # 步骤4: 清理旧备份
-    log_info "步骤4: 清理旧备份（保留7天）"
-    find "$BACKUP_DEST" -name "*.tar.gz" -mtime +7 -delete 2>/dev/null || true
-    find "$BACKUP_DEST" -name "*.sql" -mtime +7 -delete 2>/dev/null || true
+    # 清理旧备份（保留7天）
+    find "$BACKUPS_DIR" -name "oracle_*.tar.gz" -mtime +7 -delete 2>/dev/null || true
+    find "$BACKUPS_DIR" -name "*.dmp" -mtime +7 -delete 2>/dev/null || true
     
-    # 完成
-    log_success "备份任务完成"
-    echo ""
-    echo "========== 备份摘要 =========="
-    echo "备份文件: $BACKUP_RESULT"
-    echo "文件大小: $(du -h "$BACKUP_RESULT" | cut -f1)"
-    echo "日志文件: $LOG_FILE"
-    echo "=============================="
+    log_success "Oracle备份完成: $final_backup_file"
+    send_notification "Oracle备份完成" "类型: $BACKUP_TYPE\n文件: $final_backup_file"
 }
 
-# 执行主函数
 main
