@@ -1,100 +1,147 @@
 #!/bin/bash
-# ============================================================================
-# run.sh - 项目主启动器
-# ============================================================================
-
 set -euo pipefail
 
-# 颜色定义
-RED=$'\033[0;31m'
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+if [[ -f "$SCRIPT_DIR/lib/core.sh" ]]; then
+    # shellcheck source=lib/core.sh
+    source "$SCRIPT_DIR/lib/core.sh"
+else
+    echo "ERR: lib/core.sh not found" >&2
+    exit 1
+fi
+
+VERSION="3.0.0"
+
 GREEN=$'\033[0;32m'
 YELLOW=$'\033[1;33m'
 BLUE=$'\033[0;34m'
 NC=$'\033[0m'
 
-# 找到并加载库
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-if [[ -f "$SCRIPT_DIR/bin/bash_lib.sh" ]]; then
-    source "$SCRIPT_DIR/bin/bash_lib.sh"
-else
-    echo "错误: 找不到 bin/bash_lib.sh" >&2
-    exit 1
-fi
-
-VERSION="2.0.0"
-
 show_help() {
-    cat << EOF
-${GREEN}项目启动器 v${VERSION}${NC}
+    cat <<EOF
+${GREEN}Shellscript v${VERSION}${NC}
 
-${YELLOW}用法:${NC}
-    ./run.sh ${BLUE}<command>${NC} [${GREEN}options${NC}]
+${YELLOW}Usage:${NC}
+    ./run.sh ${BLUE}<command>${NC} [options]
 
-${YELLOW}命令:${NC}
-    ${BLUE}backup${NC}      - 运行Oracle备份
-    ${BLUE}pipeline${NC}    - 运行数据流水线
-    ${BLUE}report${NC}      - 生成报表
-    ${BLUE}clean${NC}       - 清理临时文件
-    ${BLUE}status${NC}      - 查看状态
-    ${BLUE}list${NC}        - 列出命令
+${YELLOW}Commands:${NC}
+    ${BLUE}nostream${NC}    Run the nostream pipeline
+    ${BLUE}mcpacket${NC}    Run the multicast packet summary pipeline
+    ${BLUE}pipeline${NC}    Run a named pipeline: ./run.sh pipeline <name>
+    ${BLUE}list${NC}        List available pipelines
+    ${BLUE}status${NC}      Show project status
+    ${BLUE}clean${NC}       Clean old logs and temporary run files
 
-${YELLOW}选项:${NC}
-    ${GREEN}--debug${NC}     - 调试模式
-    ${GREEN}--help${NC}      - 帮助信息
+${YELLOW}Options:${NC}
+    ${BLUE}--debug${NC}     Enable debug logging
+    ${BLUE}--help${NC}      Show this help
 
-${YELLOW}示例:${NC}
-    ./run.sh backup
-    DEBUG=true ./run.sh pipeline
+${YELLOW}Examples:${NC}
+    ./run.sh nostream
+    ./run.sh mcpacket
+    ./run.sh pipeline nostream --debug
 EOF
 }
 
-cmd_clean() {
-    init_environment "main"
-    log_info "清理项目临时文件..."
-    [[ -d "$LOG_BASE_DIR" ]] && find "$LOG_BASE_DIR" -name "*.log" -mtime +3 -delete
-    [[ -d "$TEMP_BASE_DIR" ]] && rm -rf "$TEMP_BASE_DIR"/*
-    log_success "清理完成"
-}
-
-cmd_status() {
-    echo "${GREEN}项目状态${NC}"
-    echo "项目根目录: $PROJECT_ROOT"
-    echo "日志目录: $LOG_BASE_DIR ($(du -sh "$LOG_BASE_DIR" 2>/dev/null | cut -f1))"
-    echo "临时目录: $TEMP_BASE_DIR"
-    echo "备份目录: $BACKUPS_DIR"
-}
-
 cmd_list() {
-    echo "${GREEN}可用命令:${NC}"
-    for script in "$SCRIPTS_DIR"/run_*.sh; do
-        [[ -f "$script" ]] && printf "  ${BLUE}%-12s${NC}\n" "$(basename "$script" .sh | sed 's/run_//')"
+    echo "${GREEN}Available pipelines:${NC}"
+    local pipeline
+    shopt -s nullglob
+    for pipeline in "$PIPELINES_DIR"/*.pipeline.sh; do
+        printf "  ${BLUE}%-16s${NC}\n" "$(basename "$pipeline" .pipeline.sh)"
     done
+    shopt -u nullglob
     echo "  clean, status, list, help"
 }
 
-run_script() {
-    local script_name="$1"
-    shift
-    local script_path="$SCRIPTS_DIR/run_${script_name}.sh"
-    
-    [[ -f "$script_path" ]] || { log_error "脚本不存在: $script_name"; cmd_list; exit 1; }
-    
-    export MODULE_NAME="$script_name"
-    log_info "执行: $script_name"
-    source "$script_path" "$@"
+cmd_status() {
+    echo "${GREEN}Project Status${NC}"
+    echo "PROJECT_ROOT: $PROJECT_ROOT"
+    echo "LOG_BASE_DIR: $LOG_BASE_DIR ($(du -sh "$LOG_BASE_DIR" 2>/dev/null | cut -f1))"
+    echo "TEMP_BASE_DIR: $TEMP_BASE_DIR ($(du -sh "$TEMP_BASE_DIR" 2>/dev/null | cut -f1))"
+    echo "RESULT_BASE_DIR: $RESULT_BASE_DIR ($(du -sh "$RESULT_BASE_DIR" 2>/dev/null | cut -f1))"
+    echo "PIPELINES_DIR: $PIPELINES_DIR"
+}
+
+cmd_clean() {
+    log_info "Cleaning old logs and temporary run files"
+    [[ -d "$LOG_BASE_DIR" ]] && find "$LOG_BASE_DIR" -name "*.log" -mtime +"${CLEANUP_RETENTION_DAYS:-7}" -delete
+    [[ -d "$TEMP_RUN_DIR" ]] && find "$TEMP_RUN_DIR" -mindepth 1 -maxdepth 1 -type d -exec rm -rf {} +
+    log_success "Cleanup completed"
 }
 
 main() {
-    local command="${1:-}"
+    local command="${1:-help}"
     shift || true
-    
+
+    local args=()
+    local args_count=0
+    while [[ "$#" -gt 0 ]]; do
+        case "$1" in
+            --debug|-d)
+                export DEBUG=true
+                shift
+                ;;
+            --help|-h)
+                show_help
+                exit 0
+                ;;
+            *)
+                args+=("$1")
+		args_count=$((args_count + 1))
+                shift
+                ;;
+        esac
+    done
+
+    init_project
+
     case "$command" in
-        backup|pipeline|report) init_environment "main"; run_script "$command" "$@" ;;
-        clean) cmd_clean ;;
-        status) cmd_status ;;
-        list|ls) cmd_list ;;
-        --help|-h) show_help ;;
-        *) [[ -z "$command" ]] && show_help || echo "未知命令: $command" ;;
+        nostream)
+            if (( args_count > 0 )); then
+                run_pipeline nostream "${args[@]}"
+	    else
+		run_pipeline nostream
+	    fi
+            ;;
+        mcpacket)
+            if (( args_count > 0 )); then
+                run_pipeline mcpacket "${args[@]}"
+            else
+                run_pipeline mcpacket
+            fi
+            ;;
+        pipeline)
+            # [[ "${#args[@]}" -gt 0 ]] || {
+	    (( args_count > 0 )) || {
+                log_error "Missing pipeline name"
+                cmd_list
+                exit 1
+            }
+            if (( args_count > 1 )); then
+                run_pipeline "${args[0]}" "${args[@]:1}"
+	    else
+		run_pipeline "${args[0]}"
+	    fi
+            ;;
+        clean)
+            cmd_clean
+            ;;
+        status)
+            cmd_status
+            ;;
+        list|ls)
+            cmd_list
+            ;;
+        help|"")
+            show_help
+            ;;
+        *)
+            log_error "Unknown command: $command"
+            cmd_list
+            exit 1
+            ;;
     esac
 }
 
