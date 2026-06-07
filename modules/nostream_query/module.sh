@@ -25,10 +25,7 @@ _nostream_worker() {
     local target_local="$3"
     local content_id="$4"
     local rest_str="$5"
-
     local tmp_f="$MODULE_TMP_RUN_DIR/${id}_${remote_host}_${content_id}.tmp"
-
-    set +e
 
     local utc_target utc_target_timestamp
     utc_target=$(date -d "$target_local +0200" -u +"%Y-%m-%d %H:%M:%S" 2>/dev/null)
@@ -46,53 +43,44 @@ _nostream_worker() {
 
     log_info "Dispatching job $id -> $remote_host contentID=$content_id utc=$utc_target"
 
-    local result rc
     result="$(
-        timeout 10s ssh ${NOSTREAM_SSH_OPTS} "$remote_host" bash -s -- \
-            "$content_id" \
-            "$utc_target_timestamp" \
-            "$NOSTREAM_REMOTE_RUNLOG_DIR" \
-            "$NOSTREAM_FILTER_KEY1" \
-            "$hour_curr" \
-            "$hour_prev1" \
-            "$hour_prev2" <<'REMOTE_SCRIPT'
-content_id="$1"
-utc_target_timestamp="$2"
-remote_runlog_dir="$3"
-filter_key="$4"
-hour_curr="$5"
-hour_prev1="$6"
-hour_prev2="$7"
+       timeout 10s ssh ${NOSTREAM_SSH_OPTS} "$remote_host" bash -s "$content_id" "$utc_target_timestamp" "$NOSTREAM_REMOTE_RUNLOG_DIR" \"$NOSTREAM_FILTER_KEY1\" "$hour_curr" "$hour_prev1" "$hour_prev2" </dev/null  <<REMOTE_SCRIPT
+set +e; set +u 
 
-channel_status=$(cat xxx 2>/dev/null | awk -v key="$content_id" '$2 == key {print $3; exit}')
-channel_status=${channel_status:-UNKNOWN}
+content_id="\$1"
+utc_target_timestamp="\$2"
+remote_runlog_dir="\$3"
+filter_key="\$4"
+hour_curr="\$5"
+hour_prev1="\$6"
+hour_prev2="\$7"
 
-target_key=$(date -d "@$utc_target_timestamp" +"%Y%m%d%H%M%S")
+channel_status=\$(cat xxx.list 2>/dev/null | awk -v key="\$content_id" '\$2 == key {print \$3; exit}')  
+channel_status=\${channel_status:-UNKNOWN}
+
+target_key=\$(date -d "@\$utc_target_timestamp" +"%Y%m%d%H%M%S")
 target_file=""
 
-for file in \
-  "$remote_runlog_dir"/Rmsh_"$hour_curr"*.log \
-  "$remote_runlog_dir"/Rmsh_"$hour_prev1"*.log \
-  "$remote_runlog_dir"/Rmsh_"$hour_prev2"*.log
+for file in "\${remote_runlog_dir}"/Rmsh_"\${hour_prev2}"*.log "\${remote_runlog_dir}"/Rmsh_"\${hour_prev1}"*.log "\${remote_runlog_dir}"/Rmsh_"\${hour_curr}"*.log
 do
-    [[ -f "$file" ]] || continue
-    filename="${file##*/}"
-    f_t="${filename:5:14}"
+    [[ -e "\$file" ]] || continue
+    filename="\${file##*/}"
+    f_t="\${filename:5:14}"
 
-    if [[ "$f_t" <= "$target_key" ]]; then
-        target_file="$file"
+    if [[ "\$f_t" < "\$target_key" ]] || [[ "\$f_t" == "\$target_key" ]]; then
+        target_file="\$file"
     fi
 done
 
-if [[ -n "$target_file" ]]; then
-    match=$(grep "$filter_key" "$target_file" 2>/dev/null | grep -m 1 "$content_id" || true)
-    if [[ -n "$match" ]]; then
-        echo "$match" | awk -v cst="$channel_status" -F '[] ]+' -v OFS=',' '{
-            gsub(/^\[/, "", $1);
-            gsub(/,$/, "", $10);
+if [[ -n "\$target_file" ]]; then
+    match=\$(grep  "\$filter_key" "\$target_file" 2>/dev/null | grep -m 1 "\$content_id" || true)   
+    if [[ -n "\$match" ]]; then
+        echo "\$match" | awk -v cst="\$channel_status" -F '[] ]+' -v OFS=',' '{
+            gsub(/^\[/, "", \$1);
+            gsub(/,\$/, "", \$10);
             found=1;
-            print cst, $1" "$2, $6, $10;
-        }'
+            print cst, \$1" "\$2, \$6, \$10;
+        }' 2>/dev/null
     fi
 fi
 REMOTE_SCRIPT
@@ -117,7 +105,7 @@ module_run() {
     local -a pids=()
     local line_num=0
     local remote_host target_local content_id rest_str id
-
+    set +e; set +u
     while IFS=',' read -r remote_host target_local content_id rest_str || [[ -n "$remote_host" ]]; do
         [[ -z "$remote_host" || "$remote_host" =~ ^# ]] && continue
         [[ -z "$content_id" || "$content_id" =~ ^# ]] && continue
@@ -126,7 +114,7 @@ module_run() {
         id=$(printf "%03d" "$line_num")
 
         _nostream_worker "$id" "$remote_host" "$target_local" "$content_id" "$rest_str" &
-	sleep 0.1
+        sleep 0.5
 
         pids+=("$!")
 
@@ -147,4 +135,4 @@ module_run() {
 
 module_cleanup() {
     safe_rm_dir "$MODULE_TMP_RUN_DIR" 2>/dev/null || true
-}
+}	
